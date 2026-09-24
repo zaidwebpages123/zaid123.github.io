@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: <loc>https://zaid123.github.io/</loc>
+Sitemap: https://zaidwebpages123.github.io/zaid123.github.io/sitemap.xml
