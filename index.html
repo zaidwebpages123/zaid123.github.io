@@ -333,6 +333,13 @@ background-size:180px 140px,220px 170px,90px 90px;transform:rotate(-4deg)}
 @media(max-width:600px){.fixed-map,.map-card{min-height:390px}.map-content{margin:18px;padding:22px 18px}.map-content h3{font-size:20px}.map-pin{font-size:44px}}
 </style>
 
+
+<style>
+.application-id-box{margin-top:14px;padding:16px 18px;border:2px solid currentColor;border-radius:14px;display:flex;flex-direction:column;gap:5px;background:rgba(255,255,255,.08)}
+.application-id-box span{font-size:.82rem;opacity:.8;text-transform:uppercase;letter-spacing:.08em}
+.application-id-box strong{font-size:1.5rem;letter-spacing:.04em;word-break:break-word}
+.application-id-box small{opacity:.78}
+</style>
 </head>
 <body>
 <header>
@@ -611,22 +618,51 @@ background-size:180px 140px,220px 170px,90px 90px;transform:rotate(-4deg)}
 </script>
 
 <script>
-// ===== Admissions: connect this to your existing Google Apps Script Web App =====
+// ===== Admissions: Google Apps Script connection =====
+// This version uses JSONP so a local HTML file can read the Apps Script response.
+// The Apps Script must support: action=submit&callback=... and action=status&callback=...
 const ADMISSIONS_ENDPOINT = "https://script.google.com/macros/s/AKfycbzAtciX9bkyClHZHJxotiNzKmlqNJQQxknkvpg889gb0hrAQmG9vD2l5SoZrYGmSh-I/exec";
 
-async function submitAdmission(form, formType, statusId){
-  const status=document.getElementById(statusId); status.textContent='Sending application...';
-  const data=Object.fromEntries(new FormData(form).entries()); data.formType=formType;
-  try{
-    const response=await fetch(ADMISSIONS_ENDPOINT,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(data)});
-    const result=await response.json();
-    if(result.success){
-      status.innerHTML='✅ Application submitted. <strong>Application ID: '+(result.applicationId||'created')+'</strong><br>Keep this ID to check your status.';
-      form.reset();
-    }else{status.textContent='❌ '+(result.error||'Could not submit application.');}
-  }catch(err){status.textContent='❌ Submission failed. Check your Apps Script URL and deployment.';}
+function jsonp(params, timeoutMs=20000){
+  return new Promise((resolve,reject)=>{
+    const callbackName='lstJsonp_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+    const script=document.createElement('script');
+    let timer;
+    const cleanup=()=>{clearTimeout(timer);script.remove();try{delete window[callbackName];}catch(e){window[callbackName]=undefined;}};
+    window[callbackName]=(data)=>{cleanup();resolve(data);};
+    const query=new URLSearchParams({...params,callback:callbackName});
+    script.src=ADMISSIONS_ENDPOINT+'?'+query.toString();
+    script.onerror=()=>{cleanup();reject(new Error('Could not contact the admission server.'));};
+    timer=setTimeout(()=>{cleanup();reject(new Error('Request timed out.'));},timeoutMs);
+    document.head.appendChild(script);
+  });
 }
 
+async function submitAdmission(form, formType, statusId){
+  const status=document.getElementById(statusId);
+  status.innerHTML='⏳ <strong>Submitting application...</strong>';
+  const data=Object.fromEntries(new FormData(form).entries());
+  data.formType=formType;
+  try{
+    // GET/JSONP is used instead of fetch(no-cors), because no-cors makes the
+    // response unreadable and therefore prevents the Application ID from showing.
+    const result=await jsonp({action:'submit',...data});
+    if(result && result.success){
+      const id=result.applicationId||result.id||'';
+      status.innerHTML='✅ <strong>Application submitted successfully!</strong><div class="application-id-box"><span>Your Application ID</span><strong>'+escapeHtml(id)+'</strong><small>Save this ID to check your admission status.</small></div>';
+      form.reset();
+      document.getElementById('applicationIdInput').value=id;
+    }else{
+      status.innerHTML='❌ <strong>Could not submit application.</strong><br>'+escapeHtml((result&&result.error)||'The server did not confirm the application.');
+    }
+  }catch(err){
+    status.innerHTML='❌ <strong>Could not submit application.</strong><br>Please check that your Google Apps Script Web App is deployed and supports the submit/status endpoints.';
+  }
+}
+
+function escapeHtml(value){
+  return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 const schoolTab=document.getElementById('schoolTab');
 const academyTab=document.getElementById('academyTab');
@@ -648,13 +684,21 @@ document.getElementById('schoolAdmissionForm').addEventListener('submit',e=>{e.p
 document.getElementById('academyAdmissionForm').addEventListener('submit',e=>{e.preventDefault();submitAdmission(e.target,'Academy','academyAdmissionStatus')});
 
 document.getElementById('checkApplicationBtn').addEventListener('click',async()=>{
- const id=document.getElementById('applicationIdInput').value.trim(); const box=document.getElementById('applicationStatusResult');
- if(!id){box.style.display='block';box.textContent='Please enter your Application ID.';return;}
- box.style.display='block';box.textContent='Checking...';
- try{
-  const response=await fetch(ADMISSIONS_ENDPOINT+'?action=status&id='+encodeURIComponent(id)); const result=await response.json();
-  if(result.success){const cls=(result.status||'').toLowerCase().replace(/\s+/g,'-');box.innerHTML='<strong>Application ID:</strong> '+result.applicationId+'<br><strong>Type:</strong> '+(result.formType||'')+'<br><span class="status-badge status-'+cls+'">'+result.status+'</span>';} else {box.textContent='❌ '+(result.error||'Application ID not found.');}
- }catch(err){box.textContent='❌ Could not check status. Check your Apps Script URL and deployment.';}
+  const id=document.getElementById('applicationIdInput').value.trim();
+  const box=document.getElementById('applicationStatusResult');
+  if(!id){box.style.display='block';box.textContent='Please enter your Application ID.';return;}
+  box.style.display='block';box.textContent='⏳ Checking application status...';
+  try{
+    const result=await jsonp({action:'status',id:id});
+    if(result&&result.success){
+      const cls=(result.status||'').toLowerCase().replace(/\s+/g,'-');
+      box.innerHTML='<strong>Application ID:</strong> '+escapeHtml(result.applicationId||id)+'<br><strong>Type:</strong> '+escapeHtml(result.formType||'')+'<br><span class="status-badge status-'+escapeHtml(cls)+'">'+escapeHtml(result.status||'Pending')+'</span>';
+    }else{
+      box.textContent='❌ '+((result&&result.error)||'Application ID not found.');
+    }
+  }catch(err){
+    box.textContent='❌ Could not check status. Please check your Apps Script deployment.';
+  }
 });
 </script>
 
